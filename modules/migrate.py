@@ -94,7 +94,11 @@ def _getSpecsFromCsv():
                     log.warning('CSV has invalid number of arguments at '
                         'line %s, skipping line.\n', reader.line_num)
                 else:
-                    results.append((row[0], row[1], row[2], row[3]))
+                    if len(row) >= 5:
+                        moduleWidgetName = row[4]
+                    else:
+                        moduleWidgetName = row[2]
+                    results.append((row[0], row[1], row[2], row[3], moduleWidgetName))
         except csv.Error as e:
             log.error('Unable to parse CSV at line %s, skipping rest of'
                 ' file.\n', reader.line_num)
@@ -132,7 +136,7 @@ def _updateHTMLFile(filePath, widgetAbsolutePath, modularWidgetAbsolutePath):
     with codecs.open(filePath, 'rb', encoding='utf8') as htmlFile:
         htmlContent = ''.join(htmlFile.readlines())
 
-    soup = BeautifulSoup(htmlContent)
+    soup = BeautifulSoup(htmlContent, "lxml")
 
     # Non-modular Widget view page path relative to the content. This path
     # will be the data attribute of any widget object tags.
@@ -312,6 +316,15 @@ def _getUpdatedString(value, widgetPath, modularWidgetPath):
     if os.path.exists(absPath):
         newPath = os.path.relpath(absPath, modularWidgetPath)
         return newPath
+
+    # [MHE]
+    if '<img' in value:
+        value = re.sub(r'<img(.*)src="../../../img/([^"]*)"',
+                       r'<img\1src="../../../../../img/\2"', value)
+        value = re.sub(r'<img(.*)src="../../widget_data/([^"]*)"',
+                       r'<img\1src="../../../../widget_data/\2"', value)
+    # [/MHE]
+
     return value
 
 def _deleteNonModularWidgetPatterns(repoPath, widgetDir):
@@ -328,7 +341,7 @@ def _deleteNonModularWidgetPatterns(repoPath, widgetDir):
         with codecs.open(patternFilePath, 'rb', encoding='utf8') as patternFile:
             patternContent = ''.join(patternFile.readlines())
 
-        soup = BeautifulSoup(patternContent)
+        soup = BeautifulSoup(patternContent, "lxml")
 
         # All patterns written assuming the content is in
         # /s9ml/chapter/file.html
@@ -337,12 +350,12 @@ def _deleteNonModularWidgetPatterns(repoPath, widgetDir):
 
         # For each pattern, figure out if the pattern references the
         # non-modular widget. If it does we want to delete it.
-        for script in  soup.find_all('script'):
+        for script in soup.find_all('script'):
             # BeautifulSoup stops processing the file at the <script> tag
             # because its contents might not be HTML. We must separately
             # parse its content to find the object tags it contains that
             # reference the widget.
-            innerSoup = BeautifulSoup(script.text)
+            innerSoup = BeautifulSoup(script.text, "lxml")
             widget = innerSoup.find('object',
                 attrs={'data': widgetViewRelativePath})
             if widget is not None:
@@ -378,7 +391,7 @@ if __name__ == '__main__':
     reposWithErrors = {}
 
     repoSpecs = _getSpecsFromCsv()
-    for name, environment, widgetDir, moduleDir in repoSpecs:
+    for name, environment, widgetDir, moduleDir, moduleWidgetDir in repoSpecs:
         try:
             repo = svn.ensureRepo(name, svn.MODULE_MIGRATION_UPDATE_SPECS,
                 environment=environment)
@@ -389,14 +402,17 @@ if __name__ == '__main__':
             reposWithErrors[name + '-' + environment] = False
             continue
 
-        logging.info('Migrating from widget %s to module %s in %s-%s',
-                     widgetDir, moduleDir, name, environment)
+        if not moduleWidgetDir:
+            moduleWidgetDir = widgetDir
+
+        logging.info('Migrating from widget %s to module %s[%s] in %s-%s',
+                     widgetDir, moduleDir, moduleWidgetDir, name, environment)
 
         widgetAbsolutePath = os.path.join(repo['path'], 'assets', 'widgets',
             widgetDir)
         modularWidgetAbsolutePath = os.path.join(repo['path'], 'assets',
-            'modules', moduleDir, 'widgets', widgetDir)
-
+            'modules', moduleDir, 'widgets', moduleWidgetDir)
+        
         if not os.path.isdir(widgetAbsolutePath):
             log.error('Unable to find non-modular widget at: %s, unable to '
                 'continue migration.\n',
